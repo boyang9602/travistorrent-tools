@@ -29,7 +29,7 @@ class GhtorrentExtractor
   REQ_LIMIT = 4990
   THREADS = 2
 
-  attr_accessor :builds, :owner, :repo, :all_commits, :closed_by_commit, :close_reason, :token
+  attr_accessor :builds, :owner, :repo, :all_commits, :closed_by_commit, :close_reason, :tokens, :round
 
   class << self
     def run(args = ARGV)
@@ -166,6 +166,7 @@ usage:
 
     contents = nil
     begin
+      round += 1
       r = open(url, 'User-Agent' => 'ghtorrent', 'Authorization' => "token #{token}")
       @remaining = r.meta['x-ratelimit-remaining'].to_i
       @reset = r.meta['x-ratelimit-reset'].to_i
@@ -200,6 +201,10 @@ usage:
     end
   end
 
+  def token
+    self.token[self.round % self.tokens.length]
+  end
+
   # Main command code
   def go
     mongo
@@ -212,7 +217,9 @@ usage:
 
     self.owner = ARGV[0]
     self.repo = ARGV[1]
-    self.token = ARGV[2]
+    self.round = 0
+    # self.token = ARGV[2]
+    self.tokens = self.config['mirror']['token']
 
     user_entry = db[:users].first(:login => owner)
 
@@ -313,7 +320,7 @@ usage:
     log 'Retrieving all commits'
     walker = Rugged::Walker.new(git)
     walker.sorting(Rugged::SORT_DATE)
-    walker.push(git.head.target)
+    walker.push(git.head.target.oid)
     self.all_commits = walker.map do |commit|
       commit.oid[0..10]
     end
@@ -401,7 +408,7 @@ usage:
 
       walker = Rugged::Walker.new(git)
       walker.sorting(Rugged::SORT_TOPO)
-      walker.push(build_commit)
+      walker.push(build_commit.oid)
 
       # Get all previous commits up to a prior build or a branch point
       prev_commits = [build_commit]
@@ -567,9 +574,12 @@ usage:
       end
     end.select { |x| !x.nil? }
 
-    puts results.first.keys.map { |x| x.to_s }.join(',')
-    results.sort { |a, b| b[:build_id]<=>a[:build_id] }.each { |x| puts x.values.join(',') }
-
+    # puts results.first.keys.map { |x| x.to_s }.join(',')
+    # results.sort { |a, b| b[:build_id]<=>a[:build_id] }.each { |x| puts x.values.join(',') }
+    File.open("#{self.owner}@#{self.repo}-ghtorrent.csv", "w") do |f|
+      f.puts results.first.keys.map { |x| x.to_s }.join(',')
+      results.sort { |a, b| b[:tr_build_id]<=>a[:tr_build_id] }.each { |x| f.puts x.values.join(',') }
+    end
   end
 
   def calculate_time_difference(walker, trigger_commit)
